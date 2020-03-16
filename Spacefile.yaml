@@ -1,0 +1,28 @@
+@clone: string file
+
+_info:
+
+run:
+    _info:
+        title: Run the Simplenetes Daemon to manage pods for all users
+        desc: |
+            This target is meant to be run from the init system (systemd or other) to manage the pod life cycles of all users pods.
+            The user should be root.
+            The daemon will figure out where to find pods by looking in each users $HOME/.simplenetes-daemon.conf.
+            If a user changes the .simplenetes-daemon.conf then the daemon needs to be restarted for the change to take effect.
+            For each user having such a config the daemon will spawn a specific process managing the pods for that user.
+            It's responsibilities are:
+            1) Check each Pod's state file to see what state it should have and invoke the pod script to make sure it has that state.
+               The daemon will also create any ramdisks for the pod (if the daemon is run as root).
+            2) Detect changes in pods config directories and invoke the pod script to signal the containers mounting those configs.
+            3) Generate proxy configurations:
+                i) Probe each Pod which has the state "running" for any clusterPorts.
+                ii) For each running Pod with clusterPorts run the Readiness probe.
+                iii) For each ready Pod generate the config.
+                iiii) If aggregated config was changed, SIGHUP the hostproxy.
+            4) Run the Liveness probe on each pod which has the state "running".
+            Note:
+                There is a way of running this Daemon as a foreground process for a single user by adding a directory of the hosthome as argument to the daemon.
+                This is a special behaviour and is only meant to be used in dev mode.
+    _env:
+        - RUN: DAEMON_MAIN -- "\$@"
