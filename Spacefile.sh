@@ -1,8 +1,143 @@
-# This function is to be run as root, often as a systemd daemon.
-# It will for each user which has a ~/.simplenetes-daemon.conf run a _DAEMON_RUN process.
+SNTD_CMDLINE()
+{
+    SPACE_SIGNATURE="[action args]"
+    SPACE_DEP="USAGE VERSION DAEMON_MAIN _GETOPTS"
+
+    local _out_rest=""
+    local _out_h="false"
+    local _out_V="false"
+    local _out_p="true"
+
+    local _out_f=""
+    local _out_o=""
+    local _out_d=""
+
+    if ! _GETOPTS "h V" "f o d p" 0 1 "$@"; then
+        printf "Usage: sntd [podname] [-f infile] [-o outfile] [-d srcdir] [-p true|false]\\n" >&2
+        return 1
+    fi
+
+    if [ "${_out_h}" = "true" ]; then
+        USAGE
+        return
+    fi
+
+    if [ "${_out_V}" = "true" ]; then
+        VERSION
+        return
+    fi
+
+    DAEMON_MAIN "${_out_rest}"
+}
+
+USAGE()
+{
+    printf "%s\\n" "Usage:
+
+    sntd -h
+        Output this help
+
+    sntd -V
+        Output version
+
+    sntd [hosthome]
+
+        hosthome (optional)
+            Path to directory of the cluster root directory.
+            If provided the program will run pods only for that cluster project,
+            if the process is run as root then ramdisks will be available.
+
+            If the hosthome argument is left out then the process must be run as root and it
+            will then search for cluster directories for all users and manage the lifecycles
+            for all the cluster projects on the host.
+
+" >&2
+}
+
+VERSION()
+{
+    printf "%s\\n" "Simplenetes daemon version 0.1."
+}
+
+_GETOPTS()
+{
+    SPACE_SIGNATURE="simpleSwitches richSwitches minPositional maxPositional [args]"
+    SPACE_DEP="PRINT STRING_SUBSTR STRING_INDEXOF STRING_ESCAPE"
+
+    local simpleSwitches="${1}"
+    shift
+
+    local richSwitches="${1}"
+    shift
+
+    local minPositional="${1:-0}"
+    shift
+
+    local maxPositional="${1:-0}"
+    shift
+
+    _out_rest=""
+
+    local options=""
+    local option=
+    for option in ${richSwitches}; do
+        options="${options}${option}:"
+    done
+
+    local posCount="0"
+    while [ "$#" -gt 0 ]; do
+        local flag="${1#-}"
+        if [ "${flag}" = "${1}" ]; then
+            # Non switch
+            posCount="$((posCount+1))"
+            if [ "${posCount}" -gt "${maxPositional}" ]; then
+                PRINT "Too many positional argumets, max ${maxPositional}" "error" 0
+                return 1
+            fi
+            _out_rest="${_out_rest}${_out_rest:+ }${1}"
+            shift
+            continue
+        fi
+        local flag2=
+        STRING_SUBSTR "${flag}" 0 1 "flag2"
+        if STRING_ITEM_INDEXOF "${simpleSwitches}" "${flag2}"; then
+            if [ "${#flag}" -gt 1 ]; then
+                PRINT "Invalid option: -${flag}" "error" 0
+                return 1
+            fi
+            eval "_out_${flag}=\"true\""
+            shift
+            continue
+        fi
+
+        local OPTIND=1
+        getopts ":${options}" "flag"
+        case "${flag}" in
+            \?)
+                PRINT "Unknown option ${1-}" "error" 0
+                return 1
+                ;;
+            :)
+                PRINT "Option -${OPTARG-} requires an argument" "error" 0
+                return 1
+                ;;
+            *)
+                STRING_ESCAPE "OPTARG"
+                eval "_out_${flag}=\"${OPTARG}\""
+                ;;
+        esac
+        shift $((OPTIND-1))
+    done
+
+    if [ "${posCount}" -lt "${minPositional}" ]; then
+        PRINT "Too few positional argumets, min ${minPositional}" "error" 0
+        return 1
+    fi
+}
+
 DAEMON_MAIN()
 {
-    SPACE_SIGNATURE="[hosthome]"
+    SPACE_SIGNATURE="[hostHome]"
     SPACE_DEP="_LOG _DAEMON_RUN _TRAP_TERM_MAIN STRING_ITEM_INDEXOF FILE_REALPATH"
 
     local hostHome="${1:-}"
@@ -12,7 +147,7 @@ DAEMON_MAIN()
     # If not root and no dir given then exit.
     if [ $(id -u) != 0 ]; then
         if [ -z "${hostHome}" ]; then
-            _LOG "The daemon has to be run as root, unless it is meant to be run for a single user then provide the HOSTHOME dir as first argument" "fatal"
+            _LOG "The daemon has to be run as root, unless it is meant to be run for a single cluster project then provide the HOSTHOME dir as first argument" "fatal"
             return 1
         fi
     fi
@@ -56,27 +191,21 @@ DAEMON_MAIN()
 
     _LOG "Running as a system daemon for all users. PID: $$" "info"
 
-    local usersDone=""
+    local clustersDone=""
 
     while [ "${_EXIT}" -eq 0 ]; do
-        local dir=
-        for dir in /home/*; do
-            if [ ! -d "${dir}" ]; then
+        local file=
+        for file in $(find /home -mindepth 3 -maxdepth 3 -type f -name cluster-id.txt); do
+            local hostHome="${file%/*}"
+            if [ ! -d "${hostHome}/pods" ]; then
                 continue
             fi
-            local file="${dir}/.simplenetes-daemon.conf"
-            if [ ! -f "${file}" ]; then
+            # Check if we already have this cluster.
+            if STRING_ITEM_INDEXOF "${clustersDone}" "${hostHome}"; then
                 continue
             fi
 
-            # Check if we already have this user.
-            if STRING_ITEM_INDEXOF "${usersDone}" "${dir}"; then
-                continue
-            fi
-            usersDone="${usersDone}${usersDone:+ }${dir}"
-
-            local hostHome="$(cat "${file}")"
-            hostHome="$(FILE_REALPATH "${hostHome}")"
+            clustersDone="${clustersDone}${clustersDone:+ }${hostHome}"
             _LOG "Adding watch to ${hostHome}" "info"
 
             local pid=
@@ -84,7 +213,7 @@ DAEMON_MAIN()
             pid=$!
             main_pids="${main_pids}${main_pids:+ }${pid}"
         done
-        sleep 1
+        sleep 3
     done
 
     # Wait for sub processes to exit
@@ -97,11 +226,11 @@ _TRAP_TERM_MAIN()
 
     trap - TERM INT
 
-    _LOG "Kill off all daemon processes: ${main_pids}" "info"
 
     local pid=
     for pid in ${main_pids}; do
-        kill -s HUP "${pid}" 2>/dev/null
+        _LOG "Kill off daemon process: ${pid}" "info"
+        kill -s HUP "${pid}"
     done
 
     # This will trigger the loop to end.
@@ -449,7 +578,7 @@ _SPAWN_PROCESS()
     local pid=
     (
         local error=
-        # If running as root we will drop privileges here.
+        # If running as root we will drop privileges here, thanks to ${exec}.
         if ! error="$(SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"; then
             _LOG "Could not exec ${podFile} ${command}. Error: ${error}" "error" "exec:${podFile}:${command}"
         else

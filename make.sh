@@ -4,6 +4,6 @@ set -e
 
 mkdir -p release
 
-space /run/ -e SPACE_MUTE_EXIT_MESSAGE=1 -d >./release/sntd
+space /cmdline/ -e SPACE_MUTE_EXIT_MESSAGE=1 -d >./release/sntd
 chmod +x ./release/sntd
 

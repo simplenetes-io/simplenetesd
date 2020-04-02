@@ -8,9 +8,7 @@ run:
         desc: |
             This target is meant to be run from the init system (systemd or other) to manage the pod life cycles of all users pods.
             The user should be root.
-            The daemon will figure out where to find pods by looking in each users $HOME/.simplenetes-daemon.conf.
-            If a user changes the .simplenetes-daemon.conf then the daemon needs to be restarted for the change to take effect.
-            For each user having such a config the daemon will spawn a specific process managing the pods for that user.
+            For each user having a cluster the daemon will spawn a specific process managing the pods for that user and project.
             It's responsibilities are:
             1) Check each Pod's state file to see what state it should have and invoke the pod script to make sure it has that state.
                The daemon will also create any ramdisks for the pod (if the daemon is run as root).
@@ -25,4 +23,12 @@ run:
                 There is a way of running this Daemon as a foreground process for a single user by adding a directory of the hosthome as argument to the daemon.
                 This is a special behaviour and is only meant to be used in dev mode.
     _env:
-        - RUN: DAEMON_MAIN -- "\$@"
+        - hosthome:
+            title: Path to the cluster dir
+        - RUN: DAEMON_MAIN -- "${hosthome}"
+
+cmdline:
+    _info:
+        title: Use sntd as a standalone cmd line tool
+    _env:
+        - RUN: SNTD_CMDLINE -- "\$@"
