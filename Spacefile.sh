@@ -254,15 +254,16 @@ _DAEMON_RUN()
         _LOG "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
         return 1
     fi
-    local _PODPATTERNS="${hostHome}/pods,.*/release/.*/.*.state"
+    local _PODPATTERNS="${hostHome}/pods,.*/release/[^.].*/.*.state"
     local _PROXYCONF="${hostHome}/proxy.conf"
-    local _SUBPROCESS_LOG_LEVEL=2  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
+    local _SUBPROCESS_LOG_LEVEL="${SPACE_LOG_LEVEL:-2}"  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
     local _BUSYLIST=""
     local _PODS=""
     local _CONFIGCHKSUMS=""
     local _CONFIGSCHANGED=""
     local _TMPDIR=
     local _STARTTS="$(date +%s)"
+    local _CURRENT_STATES=""
 
     # Global:
     _PHASE="normal"
@@ -470,7 +471,7 @@ _CHECK_CONFIG_CHANGES()
 # and spawn a update process with state and potential config updates.
 _SPAWN_PROCESSES()
 {
-    SPACE_DEP="_SPAWN_PROCESS"
+    SPACE_DEP="_SPAWN_PROCESS _SPAWN_STATE_CHANGED _LOG_CLEAR _LOG"
 
     local nakedFile=
     for nakedFile in ${_PODS}; do
@@ -499,17 +500,50 @@ _SPAWN_PROCESSES()
             done
         fi
 
-        # Note: we could do an optimization where we don't spawn
-        # a process for a pod which should be stopped and which
-        # we have already stopped.
-        # It is enough to only run pods which need to be constantly
-        # checked on to be in the running state.
+        local stateChanged="false"
+        if _SPAWN_STATE_CHANGED "${nakedFile}" "${state}"; then
+            stateChanged="true"
+            _LOG "State changed. Exec ${nakedFile} ${state}" "info" 0
+            _LOG_CLEAR "exec:${nakedFile}"
+        fi
 
-        if ! _SPAWN_PROCESS "${nakedFile}" "${state}" "${changedConfigs}"; then
-            _LOG "Could not spawn process for ${nakedFile}" "error" "spawn:${nakedFile}"
-            return 0
+        if [ "${stateChanged}" = "true" ] ||
+           [ "${state}" = "running" ] ||
+           [ -n "${changedConfigs}" ]; then
+            if ! _SPAWN_PROCESS "${nakedFile}" "${state}" "${changedConfigs}"; then
+                _LOG "Could not spawn process for ${nakedFile}" "error" "spawn:${nakedFile}"
+                return 0
+            fi
         fi
     done
+}
+
+# Save the given state and return 0 if the state did change.
+_SPAWN_STATE_CHANGED()
+{
+    SPACE_SIGNATURE="nakedFile state"
+
+    local nakedFile="${1}"
+    shift
+
+    local state="${1}"
+    shift
+
+    local prevState=""
+    local line="$(printf "%s\\n" "${_CURRENT_STATES}" |grep -m1 "^${nakedFile} ")"
+
+    if [ -n "${line}" ]; then
+        prevState="${line##*[ ]}"
+        _CURRENT_STATES="$(printf "%s\\n" "${_CURRENT_STATES}" |grep -v "^${nakedFile} ")"
+    fi
+
+    # Save state
+    local nl="
+"
+    _CURRENT_STATES="${_CURRENT_STATES}${_CURRENT_STATES:+$nl}${nakedFile} ${state}"
+
+    # Set return status
+    [ "${prevState}" != "${state}" ]
 }
 
 # Spawn a subprocess and put it in the busy list.
@@ -580,15 +614,13 @@ _SPAWN_PROCESS()
         local error=
         # If running as root we will drop privileges here, thanks to ${exec}.
         if ! error="$(SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"; then
-            _LOG "Could not exec ${podFile} ${command}. Error: ${error}" "error" "exec:${podFile}:${command}"
-        else
-            _LOG "Exec ${podFile} ${command}" "info" "exec:${podFile}:${command}"
+            _LOG "Could not exec ${podFile} ${command}. Error: ${error}" "error" "exec:${podFile}"
         fi
         if [ -n "${changedConfigs}" ]; then
             if ! error="$(SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} reload-configs ${changedConfigs}" 2>&1)"; then
-                _LOG "Could not exec ${podFile} reload-configs. Error: ${error}" "error" "exec:${podFile}:reload-configs"
+                _LOG "Could not exec ${podFile} reload-configs. Error: ${error}" "error" 0
             else
-                _LOG "Exec ${podFile} reload-configs" "info" "exec:${podFile}:reload-configs"
+                _LOG "Exec ${podFile} reload-configs" "info" 0
             fi
         fi
 
@@ -701,6 +733,11 @@ _LOG()
     # If no tag provided the message is the tag which means it won't repeat it self.
     local tag="${1:-${message}}"
 
+    if [ "${tag}" = "0" ]; then
+        PRINT "${message}" "${level}" 0
+        return
+    fi
+
     # Check if this tag already exists, of so check if the level is the same.
     local hash=
     STRING_HASH "${tag}" "hash"
@@ -720,4 +757,19 @@ _LOG()
         fi
         PRINT "${message}" "${level}" 0
     fi
+}
+
+_LOG_CLEAR()
+{
+    SPACE_SIGNATURE="tag"
+    SPACE_DEP="STRING_HASH"
+
+    local tag="${1}"
+    shift
+
+    local hash=
+    STRING_HASH "${tag}" "hash"
+
+    local logtext="$(grep -v "^${hash}\>" "${_LOGFILETAGS}")"
+    printf "%s\\n" "${logtext}" >"${_LOGFILETAGS}"
 }
