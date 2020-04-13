@@ -1,3 +1,8 @@
+# TODO:
+# logile should be -o switch.
+# Logging sohuld be as nice as for the pods?
+# can we reduce the iterative priv drop with sh, it keeps logging a lot into sys logs.
+#
 SNTD_CMDLINE()
 {
     SPACE_SIGNATURE="[action args]"
@@ -6,14 +11,11 @@ SNTD_CMDLINE()
     local _out_rest=""
     local _out_h="false"
     local _out_V="false"
-    local _out_p="true"
 
-    local _out_f=""
     local _out_o=""
-    local _out_d=""
 
-    if ! _GETOPTS "h V" "f o d p" 0 1 "$@"; then
-        printf "Usage: sntd [podname] [-f infile] [-o outfile] [-d srcdir] [-p true|false]\\n" >&2
+    if ! _GETOPTS "h V" "o" 0 1 "$@"; then
+        printf "Usage: sntd [clusterHome]  [-o logfile] \\n" >&2
         return 1
     fi
 
@@ -27,7 +29,13 @@ SNTD_CMDLINE()
         return
     fi
 
-    DAEMON_MAIN "${_out_rest}"
+    local logfile="${_out_o}"
+
+    if [ -n "${logfile}" ]; then
+        DAEMON_MAIN "${_out_rest}" 2>>"${logfile}"
+    else
+        DAEMON_MAIN "${_out_rest}"
+    fi
 }
 
 USAGE()
@@ -40,7 +48,7 @@ USAGE()
     sntd -V
         Output version
 
-    sntd [hosthome]
+    sntd [hosthome] [-o logfile]
 
         hosthome (optional)
             Path to directory of the cluster root directory.
@@ -50,6 +58,11 @@ USAGE()
             If the hosthome argument is left out then the process must be run as root and it
             will then search for cluster directories for all users and manage the lifecycles
             for all the cluster projects on the host.
+
+        -o logfile
+            Path to logfile to append output.
+            In left out then output to stderr.
+
 
 " >&2
 }
@@ -265,7 +278,7 @@ _DAEMON_RUN()
     local _STARTTS="$(date +%s)"
     local _CURRENT_STATES=""
 
-    # Global:
+    # Global in this process:
     _PHASE="normal"
 
     trap _TRAP_TERM HUP
@@ -329,9 +342,9 @@ _DAEMON_ITERATE()
         return 1
     fi
 
-    # Wait at least 10 seconds before updating the proxy.conf since it may flicker to empty otherwise on startup.
+    # Initially wait at least 10 seconds before updating the proxy.conf since it may flicker to empty otherwise on startup.
     local ts="$(date +%s)"
-    if [ "$((ts-_STARTTS >10000))" -eq 1 ]; then
+    if [ $((ts-_STARTTS >10)) ]; then
         if ! _WRITE_PROXY_CONFIG; then
             _LOG "Could not write proxy config" "error"
             return 1
@@ -339,7 +352,7 @@ _DAEMON_ITERATE()
     fi
 }
 
-# For all basedirs ad patterns provided
+# For all basedirs and patterns provided
 # find all pods with a state file.
 # Populate _PODS as "path_to_pod_naked_file etc".
 # The path is the full pod path.
@@ -507,6 +520,11 @@ _SPAWN_PROCESSES()
             _LOG_CLEAR "exec:${nakedFile}"
         fi
 
+        if [ -n "${changedConfigs}" ]; then
+            _LOG "Configs changed. Reload configs for ${nakedFile} ${state}" "info" 0
+            _LOG_CLEAR "config:${nakedFile}"
+        fi
+
         if [ "${stateChanged}" = "true" ] ||
            [ "${state}" = "running" ] ||
            [ -n "${changedConfigs}" ]; then
@@ -586,9 +604,9 @@ _SPAWN_PROCESS()
                     local error=
                     if ! error="$(_CREATE_RAMDISK "${podDir}" "${name}" "${size}" 2>&1)"; then
                         _LOG "Could not create ramdisk ${name}:${size} in ${podDir}, Error: ${error}" "error" "ramdisk:${podDir}:${name}:${size}"
+                        return 1
                     else
                         _LOG "Created ramdisk ${name}:${size} in ${podDir}" "info" "ramdisk:${podDir}:${name}:${size}"
-                        return 1
                     fi
                 done
             fi
@@ -598,7 +616,7 @@ _SPAWN_PROCESS()
     elif [ "${state}" = "removed" ]; then
         command="rm"
     else
-        LOG "State file has unknown state." "debug"
+        _LOG "State file has unknown state." "debug"
         return 0
     fi
 
@@ -618,9 +636,7 @@ _SPAWN_PROCESS()
         fi
         if [ -n "${changedConfigs}" ]; then
             if ! error="$(SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} reload-configs ${changedConfigs}" 2>&1)"; then
-                _LOG "Could not exec ${podFile} reload-configs. Error: ${error}" "error" 0
-            else
-                _LOG "Exec ${podFile} reload-configs" "info" 0
+                _LOG "Could not exec ${podFile} reload-configs. Error: ${error}" "error" "config:${podFile}"
             fi
         fi
 
@@ -651,7 +667,7 @@ _SPAWN_PROCESS()
 }
 
 # Concat all proxy config fragments into a whole and compare it to the existing config.
-# If they differ then update the actualy config.
+# If they differ then update the actual config.
 _WRITE_PROXY_CONFIG()
 {
     if [ -z "${_PROXYCONF}" ]; then
