@@ -158,7 +158,7 @@ DAEMON_MAIN()
     local _LOGFILETAGS="$(mktemp 2>/dev/null || mktemp -t 'sometmpdir')"
 
     # If not root and no dir given then exit.
-    if [ $(id -u) != 0 ]; then
+    if [ "$(id -u)" != 0 ]; then
         if [ -z "${hostHome}" ]; then
             _LOG "The daemon has to be run as root, unless it is meant to be run for a single cluster project then provide the HOSTHOME dir as first argument" "fatal"
             return 1
@@ -267,6 +267,18 @@ _DAEMON_RUN()
         _LOG "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
         return 1
     fi
+    local _USERUID=
+    if ! _USERUID="$(FILE_STAT "${hostHome}" "%u")"; then
+        _LOG "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
+        return 1
+    fi
+
+    local _USERGID=
+    if ! _USERGID="$(FILE_STAT "${hostHome}" "%g")"; then
+        _LOG "Could not stat owner group of directory ${hostHome}, will not run this instance" "error"
+        return 1
+    fi
+
     local _PODPATTERNS="${hostHome}/pods,.*/release/[^.].*/.*.state"
     local _PROXYCONF="${hostHome}/proxy.conf"
     local _SUBPROCESS_LOG_LEVEL="${SPACE_LOG_LEVEL:-2}"  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
@@ -440,7 +452,8 @@ _CHECK_CONFIG_CHANGES()
 
         # Get the checksum of each config dir in the pod dir.
         local configDir=
-        for configDir in ${configsDir}/*; do
+        #for configDir in ${configsDir}/*; do
+        for configDir in $(cd "${configsDir}" 2>/dev/null && find . -maxdepth 1 -type d |cut -b3-); do
             if [ ! -d "${configDir}" ]; then
                 continue
             fi
@@ -484,7 +497,7 @@ _CHECK_CONFIG_CHANGES()
 # and spawn a update process with state and potential config updates.
 _SPAWN_PROCESSES()
 {
-    SPACE_DEP="_SPAWN_PROCESS _SPAWN_STATE_CHANGED _LOG_CLEAR _LOG"
+    SPACE_DEP="_SPAWN_PROCESS _SPAWN_STATE_CHANGED _LOG_CLEAR _LOG STRING_IS_ALL"
 
     local nakedFile=
     for nakedFile in ${_PODS}; do
@@ -497,6 +510,24 @@ _SPAWN_PROCESSES()
                 continue 2
             fi
         done
+
+        local actionFile="${nakedFile}.action"
+        local action=
+        if [ -f "${actionFile}" ]; then
+            action="$(cat "${actionFile}")"
+            rm "${actionFile}"
+            # Check the action so it is valid:
+            if [ "${action%[ ]*}" = "rerun" ]; then
+                if ! STRING_IS_ALL "${action}" "a-z0-9_ "; then
+                    action=
+                fi
+            else
+                action=
+            fi
+            if [ -z "${action}" ]; then
+                _LOG "Action not recognized for ${nakedFile}" "error" 0
+            fi
+        fi
 
         local stateFile="${nakedFile}.state"
         local state="$(cat "${stateFile}")"
@@ -511,6 +542,13 @@ _SPAWN_PROCESSES()
                     changedConfigs="${changedConfigs}${changedConfigs:+ }${config}"
                 fi
             done
+            if [ -n "${action}" ]; then
+                _LOG "Action '${action}' provided for ${nakedFile}" "info" 0
+            fi
+        else
+            if [ -n "${action}" ]; then
+                _LOG "Action '${action}' provided but pod is not in 'running' state for ${nakedFile}" "info" 0
+            fi
         fi
 
         local stateChanged="false"
@@ -521,14 +559,14 @@ _SPAWN_PROCESSES()
         fi
 
         if [ -n "${changedConfigs}" ]; then
-            _LOG "Configs changed. Reload configs for ${nakedFile} ${state}" "info" 0
+            _LOG "Configs changed. Reload configs for ${nakedFile}" "info" 0
             _LOG_CLEAR "config:${nakedFile}"
         fi
 
         if [ "${stateChanged}" = "true" ] ||
            [ "${state}" = "running" ] ||
            [ -n "${changedConfigs}" ]; then
-            if ! _SPAWN_PROCESS "${nakedFile}" "${state}" "${changedConfigs}"; then
+            if ! _SPAWN_PROCESS "${nakedFile}" "${state}" "${changedConfigs}" "${action}"; then
                 _LOG "Could not spawn process for ${nakedFile}" "error" "spawn:${nakedFile}"
                 return 0
             fi
@@ -567,7 +605,7 @@ _SPAWN_STATE_CHANGED()
 # Spawn a subprocess and put it in the busy list.
 _SPAWN_PROCESS()
 {
-    SPACE_SIGNATURE="nakedfile state [changedConfigs]"
+    SPACE_SIGNATURE="nakedfile state changedConfigs action"
     SPACE_DEP="STRING_HASH _CREATE_RAMDISK _LOG"
 
     local nakedFile="${1}"
@@ -579,12 +617,17 @@ _SPAWN_PROCESS()
     local changedConfigs="${1}"
     shift
 
+    local action="${1}"
+    shift
+
     local podFile="${nakedFile}"
 
+    local _HOME="${HOME}"
     local exec="sh -c"
     if [ "$(id -u)" = "0" ]; then
         # Drop priviligies
-        exec="su ${_USER} -c"
+        exec="setpriv --reuid ${_USERUID} --regid ${_USERGID} --init-groups sh -c"
+        _HOME="/home/${_USER}"
     fi
 
     local command=
@@ -594,7 +637,7 @@ _SPAWN_PROCESS()
         if [ "$(id -u)" = "0" ]; then
             # Check if to create ramdisks for this pod
             local ramdisks=
-            ramdisks="$(SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ramdisk-config")"
+            ramdisks="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ramdisk-config")"
             if [ -n "${ramdisks}" ]; then
                 local podDir="${nakedFile%/*}"
                 local ramdisk=
@@ -620,6 +663,11 @@ _SPAWN_PROCESS()
         return 0
     fi
 
+    # If we have a action given, then we hijack the command at this point.
+    if [ "${state}" = "running" ] && [ -n "${action}" ]; then
+        command="${action}"
+    fi
+
     local hash=
     if ! STRING_HASH "${nakedFile}" "hash"; then
         return 1
@@ -631,11 +679,11 @@ _SPAWN_PROCESS()
     (
         local error=
         # If running as root we will drop privileges here, thanks to ${exec}.
-        if ! error="$(SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"; then
+        if ! error="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"; then
             _LOG "Could not exec ${podFile} ${command}. Error: ${error}" "error" "exec:${podFile}"
         fi
         if [ -n "${changedConfigs}" ]; then
-            if ! error="$(SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} reload-configs ${changedConfigs}" 2>&1)"; then
+            if ! error="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} reload-configs ${changedConfigs}" 2>&1)"; then
                 _LOG "Could not exec ${podFile} reload-configs. Error: ${error}" "error" "config:${podFile}"
             fi
         fi
@@ -648,7 +696,7 @@ _SPAWN_PROCESS()
             fi
             if [ -n "${cc}" ]; then
                 # Run ReadinessProbe and write proxy config fragment.
-                if SPACE_LOG_LEVEL="0" ${exec} "${podFile} readiness"; then
+                if USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="0" ${exec} "${podFile} readiness"; then
                     printf "%s\\n" "${cc}" >"${proxyConfigFragment}.tmp"
                 else
                     # Reset
@@ -658,7 +706,7 @@ _SPAWN_PROCESS()
             fi
 
             # Run LivenessProbe
-            SPACE_LOG_LEVEL="0" ${exec} "${podFile} liveness"
+            USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="0" ${exec} "${podFile} liveness"
         fi
     )&
     pid=$!
@@ -677,7 +725,6 @@ _WRITE_PROXY_CONFIG()
     local proxyConf="${_TMPDIR}/proxy.conf"
 
     local file=
-    local contents=
     cat "${_TMPDIR}"/proxy.*.conf 2>/dev/null |sort >"${proxyConf}"
     printf "%s\\n" "### EOF" >>"${proxyConf}"
 
@@ -695,12 +742,12 @@ _CREATE_RAMDISK()
 
     if [ ! -d "${podDir}/ramdisk" ]; then
         mkdir "${podDir}/ramdisk"
-        chown "${_USER}:${_USER}" "${podDir}/ramdisk"
+        chown "${_USERUID}:${_USERGID}" "${podDir}/ramdisk"
     fi
 
     if [ ! -d "${podDir}/ramdisk/${name}" ]; then
         mkdir "${podDir}/ramdisk/${name}"
-        chown "${_USER}:${_USER}" "${podDir}/ramdisk/${name}"
+        chown "${_USERUID}:${_USERGID}" "${podDir}/ramdisk/${name}"
     fi
 
     if mountpoint -q "${podDir}/ramdisk/${name}"; then
@@ -712,7 +759,7 @@ _CREATE_RAMDISK()
         return 1
     fi
 
-    chown "${_USER}:${_USER}" "${podDir}/ramdisk/${name}"
+    chown "${_USERUID}:${_USERGID}" "${podDir}/ramdisk/${name}"
     chmod 700 "${podDir}/ramdisk/${name}"
 }
 
@@ -724,7 +771,8 @@ _DESTROY_RAMDISKS()
 
     if [ -d "${podDir}/ramdisk" ]; then
         local dir=
-        for dir in "${podDir}/ramdisk/"*; do
+        #for dir in "${podDir}/ramdisk/"*; do
+        for dir in $(cd "${podDir}/ramdisk" 2>/dev/null && find . -maxdepth 1 -type d |cut -b3-); do
             if mountpoint -q "${dir}"; then
                 _LOG "Unmount ramdisk ${dir}" "info"
                 umount "${dir}"
