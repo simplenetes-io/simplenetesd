@@ -452,8 +452,7 @@ _CHECK_CONFIG_CHANGES()
 
         # Get the checksum of each config dir in the pod dir.
         local configDir=
-        #for configDir in ${configsDir}/*; do
-        for configDir in $(cd "${configsDir}" 2>/dev/null && find . -maxdepth 1 -type d |cut -b3-); do
+        for configDir in $(find "${configsDir}" -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do
             if [ ! -d "${configDir}" ]; then
                 continue
             fi
@@ -771,8 +770,7 @@ _DESTROY_RAMDISKS()
 
     if [ -d "${podDir}/ramdisk" ]; then
         local dir=
-        #for dir in "${podDir}/ramdisk/"*; do
-        for dir in $(cd "${podDir}/ramdisk" 2>/dev/null && find . -maxdepth 1 -type d |cut -b3-); do
+        for dir in $(find "${podDir}/ramdisk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do
             if mountpoint -q "${dir}"; then
                 _LOG "Unmount ramdisk ${dir}" "info"
                 umount "${dir}"
