@@ -706,6 +706,11 @@ _SPAWN_PROCESS()
 
             # Run LivenessProbe
             USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="0" ${exec} "${podFile} liveness"
+        else
+            # If not running, remove the proxy config for this pod.
+            if [ -f "${proxyConfigFragment}" ]; then
+                rm "${proxyConfigFragment}" 
+            fi
         fi
     )&
     pid=$!
