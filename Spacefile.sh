@@ -1,8 +1,5 @@
-# TODO:
-# logile should be -o switch.
-# Logging sohuld be as nice as for the pods?
-# can we reduce the iterative priv drop with sh, it keeps logging a lot into sys logs.
-#
+# Note: possibly add functionality to keep track of pod daemon processes to see if they
+# disappear and then respawn the pod.
 SNTD_CMDLINE()
 {
     SPACE_SIGNATURE="[action args]"
@@ -12,9 +9,7 @@ SNTD_CMDLINE()
     local _out_h="false"
     local _out_V="false"
 
-    local _out_o=""
-
-    if ! _GETOPTS "h V" "o" 0 1 "$@"; then
+    if ! _GETOPTS "h V" "" 0 1 "$@"; then
         printf "Usage: sntd [clusterHome]  [-o logfile] \\n" >&2
         return 1
     fi
@@ -29,13 +24,7 @@ SNTD_CMDLINE()
         return
     fi
 
-    local logfile="${_out_o}"
-
-    if [ -n "${logfile}" ]; then
-        DAEMON_MAIN "${_out_rest}" 2>>"${logfile}"
-    else
-        DAEMON_MAIN "${_out_rest}"
-    fi
+    DAEMON_MAIN "${_out_rest}"
 }
 
 USAGE()
@@ -48,7 +37,7 @@ USAGE()
     sntd -V
         Output version
 
-    sntd [hosthome] [-o logfile]
+    sntd [hosthome]
 
         hosthome (optional)
             Path to directory of the cluster root directory.
@@ -58,11 +47,6 @@ USAGE()
             If the hosthome argument is left out then the process must be run as root and it
             will then search for cluster directories for all users and manage the lifecycles
             for all the cluster projects on the host.
-
-        -o logfile
-            Path to logfile to append output.
-            In left out then output to stderr.
-
 
 " >&2
 }
@@ -151,23 +135,21 @@ _GETOPTS()
 DAEMON_MAIN()
 {
     SPACE_SIGNATURE="[hostHome]"
-    SPACE_DEP="_LOG _DAEMON_RUN _TRAP_TERM_MAIN STRING_ITEM_INDEXOF FILE_REALPATH"
+    SPACE_DEP="PRINT _DAEMON_RUN _TRAP_TERM_MAIN STRING_ITEM_INDEXOF FILE_REALPATH"
 
     local hostHome="${1:-}"
-
-    local _LOGFILETAGS="$(mktemp 2>/dev/null || mktemp -t 'sometmpdir')"
 
     # If not root and no dir given then exit.
     if [ "$(id -u)" != 0 ]; then
         if [ -z "${hostHome}" ]; then
-            _LOG "The daemon has to be run as root, unless it is meant to be run for a single cluster project then provide the HOSTHOME dir as first argument" "fatal"
+            PRINT "The daemon has to be run as root, unless it is meant to be run for a single cluster project then provide the HOSTHOME dir as first argument" "error"
             return 1
         fi
     fi
 
     local _EXIT=0
     local main_pids=""
-    trap _TRAP_TERM_MAIN TERM INT
+    trap _TRAP_TERM_MAIN TERM INT HUP
 
     # If directory given as argument then don't run this in Daemon mode,
     # pass it directly to _DAEMON_RUN to run for single user.
@@ -175,88 +157,78 @@ DAEMON_MAIN()
     if [ -n "${hostHome}" ]; then
         # Run for single user
         hostHome="$(FILE_REALPATH "${hostHome}")"
-        _LOG "hostHome is ${hostHome}" "info"
         if [ ! -d "${hostHome}/pods" ]; then
-            _LOG "The specified hostHome is lacking a 'pods' dir" "fatal"
+            PRINT "The specified hostHome '${hostHome}' is lacking a 'pods' dir" "error"
             return 1
         fi
-        _LOG "Running for single user in foreground (dev mode). PID: $$" "info"
-        _LOG "Adding watch to ${hostHome}" "info"
+        PRINT "Running service for single host home. PID: $$" "info"
+        PRINT "Adding watch to ${hostHome}" "info"
         local pid=
         _DAEMON_RUN "${hostHome}" &
         pid=$!
         main_pids="${main_pids}${main_pids:+ }${pid}"
-        while true; do
-            sleep 1
-            # This loop will end if the single sub process exists.
-            if kill -0 ${main_pids} 2>/dev/null && [ "${_EXIT}" -eq 0 ]; then
-                continue
-            fi
-            # Wait for sub processes to exit
-            wait ${main_pids} 2>/dev/null >&2
-            break
-        done
 
-        # Set the exit status to error if this was not a user triggered shutdown.
-        [ "${_EXIT}" -eq 1 ]
-        return
+        # Wait until signalled to exit.
+        while [ "${_EXIT}" -eq 0 ]; do
+            sleep 1
+        done
+    else
+        PRINT "Running service for all users. PID: $$" "info"
+
+        local clustersDone=""
+
+        while [ "${_EXIT}" -eq 0 ]; do
+            local file=
+            for file in $(find /home -mindepth 3 -maxdepth 3 -type f -name cluster-id.txt); do
+                local hostHome="${file%/*}"
+                if [ ! -d "${hostHome}/pods" ]; then
+                    continue
+                fi
+                # Check if we already have this cluster.
+                if STRING_ITEM_INDEXOF "${clustersDone}" "${hostHome}"; then
+                    continue
+                fi
+
+                clustersDone="${clustersDone}${clustersDone:+ }${hostHome}"
+                PRINT "Adding watch to ${hostHome}" "info"
+
+                local pid=
+                _DAEMON_RUN "${hostHome}" &
+                pid=$!
+                main_pids="${main_pids}${main_pids:+ }${pid}"
+            done
+            sleep 3
+        done
     fi
 
-    _LOG "Running as a system daemon for all users. PID: $$" "info"
+    trap - TERM INT HUP
 
-    local clustersDone=""
-
-    while [ "${_EXIT}" -eq 0 ]; do
-        local file=
-        for file in $(find /home -mindepth 3 -maxdepth 3 -type f -name cluster-id.txt); do
-            local hostHome="${file%/*}"
-            if [ ! -d "${hostHome}/pods" ]; then
-                continue
-            fi
-            # Check if we already have this cluster.
-            if STRING_ITEM_INDEXOF "${clustersDone}" "${hostHome}"; then
-                continue
-            fi
-
-            clustersDone="${clustersDone}${clustersDone:+ }${hostHome}"
-            _LOG "Adding watch to ${hostHome}" "info"
-
-            local pid=
-            _DAEMON_RUN "${hostHome}" &
-            pid=$!
-            main_pids="${main_pids}${main_pids:+ }${pid}"
-        done
-        sleep 3
+    # Kill subprocesses, if not already killed.
+    local pid=
+    for pid in ${main_pids}; do
+        kill -s HUP "${pid}" 2>/dev/null
     done
 
     # Wait for sub processes to exit
     wait ${main_pids} 2>/dev/null >&2
+
+    # Set the exit status to error if this was not a user triggered shutdown.
+    [ "${_EXIT}" -eq 1 ]
+    return
 }
 
 _TRAP_TERM_MAIN()
 {
-    SPACE_DEP="_LOG"
-
-    trap - TERM INT
-
-
-    local pid=
-    for pid in ${main_pids}; do
-        _LOG "Kill off daemon process: ${pid}" "info"
-        kill -s HUP "${pid}"
-    done
-
-    # This will trigger the loop to end.
     _EXIT=1
 }
 
 # Run for single user and hostHome.
 # The username is used when creating ramdisks and chowning them,
-# also when dropping priviligies for when running pods.
+# also when dropping privileges for when querying pods about ramdisk configurations.
 _DAEMON_RUN()
 {
     SPACE_SIGNATURE="hostHome"
-    SPACE_DEP="_DAEMON_ITERATE _UPDATE_BUSY_LIST _LOG _TRAP_TERM FILE_STAT"
+    SPACE_DEP="_DAEMON_ITERATE _UPDATE_BUSY_LIST PRINT _TRAP_TERM FILE_STAT"
 
     local hostHome="${1}"
     shift
@@ -264,18 +236,18 @@ _DAEMON_RUN()
     # Declaring some shared variables here:
     local _USER=
     if ! _USER="$(FILE_STAT "${hostHome}" "%U")"; then
-        _LOG "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
+        PRINT "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
         return 1
     fi
     local _USERUID=
     if ! _USERUID="$(FILE_STAT "${hostHome}" "%u")"; then
-        _LOG "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
+        PRINT "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
         return 1
     fi
 
     local _USERGID=
     if ! _USERGID="$(FILE_STAT "${hostHome}" "%g")"; then
-        _LOG "Could not stat owner group of directory ${hostHome}, will not run this instance" "error"
+        PRINT "Could not stat owner group of directory ${hostHome}, will not run this instance" "error"
         return 1
     fi
 
@@ -284,36 +256,31 @@ _DAEMON_RUN()
     local _SUBPROCESS_LOG_LEVEL="${SPACE_LOG_LEVEL:-2}"  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
     local _BUSYLIST=""
     local _PODS=""
-    local _CONFIGCHKSUMS=""
-    local _CONFIGSCHANGED=""
-    local _TMPDIR=
-    local _STARTTS="$(date +%s)"
     local _CURRENT_STATES=""
 
-    # Global in this process:
-    _PHASE="normal"
+    local _PHASE="normal"
 
     trap _TRAP_TERM HUP
 
-    while true; do
-        if [ "${_PHASE}" = "normal" ]; then
-            if ! _DAEMON_ITERATE; then
-                _PHASE="shutdown"
-                continue
-            fi
-            sleep 6
-        elif [ "${_PHASE}" = "shutdown" ]; then
-            # Perform graceful shutdown.
-            # Wait for all subprocesses to exit.
-            _LOG "Initiating graceful shutdown for ${hostHome}" "info"
-            _UPDATE_BUSY_LIST
-            if [ -z "${_BUSYLIST}" ]; then
-                _LOG "Shutdown done for ${hostHome}" "info"
-                return 1
-            fi
-            sleep 2
+    while [ "${_PHASE}" = "normal" ]; do
+        if ! _DAEMON_ITERATE; then
+            _PHASE="shutdown"
+            continue
         fi
+        sleep 6
     done
+
+    trap - HUP
+
+    # Perform graceful shutdown.
+    # Wait for all subprocesses to exit.
+    PRINT "Initiating graceful shutdown for ${hostHome}" "info"
+    while [ -n "${_BUSYLIST}" ]; do
+        _UPDATE_BUSY_LIST
+        sleep 2
+    done
+
+    PRINT "Shutdown done for ${hostHome}" "info"
 }
 
 _TRAP_TERM()
@@ -327,40 +294,26 @@ _TRAP_TERM()
 # Iterate the full list of pods, check if that pod is busy, otherwie
 _DAEMON_ITERATE()
 {
-    SPACE_DEP="_LOG _UPDATE_BUSY_LIST _FETCH_POD_FILES _CHECK_CONFIG_CHANGES _SPAWN_PROCESSES _WRITE_PROXY_CONFIG"
-
-    # We recreate the tmpdir if it has been removed, since this is a long running usage of tmp it might get removed at some point.
-    if [ -z "${_TMPDIR}" ] || [ ! -d "${_TMPDIR}" ]; then
-        _TMPDIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'sometmpdir')"
-    fi
+    SPACE_DEP="PRINT _UPDATE_BUSY_LIST _FETCH_POD_FILES _SPAWN_PROCESSES _WRITE_PROXY_CONFIG"
 
     if ! _FETCH_POD_FILES; then
-        _LOG "Error in fetching pod files" "error"
+        PRINT "Error in fetching pod files" "error"
         return 1
     fi
 
     if ! _UPDATE_BUSY_LIST; then
-        _LOG "Cannot update busy list" "error"
-        return 1
-    fi
-
-    if ! _CHECK_CONFIG_CHANGES; then
-        _LOG "Could not check pod config changes" "error"
+        PRINT "Cannot update busy list" "error"
         return 1
     fi
 
     if ! _SPAWN_PROCESSES; then
-       _LOG "Could not spawn process" "error"
+       PRINT "Could not spawn process" "error"
         return 1
     fi
 
-    # Initially wait at least 10 seconds before updating the proxy.conf since it may flicker to empty otherwise on startup.
-    local ts="$(date +%s)"
-    if [ $((ts-_STARTTS >10)) ]; then
-        if ! _WRITE_PROXY_CONFIG; then
-            _LOG "Could not write proxy config" "error"
-            return 1
-        fi
+    if ! _WRITE_PROXY_CONFIG; then
+        PRINT "Could not write proxy config" "error"
+        return 1
     fi
 }
 
@@ -393,10 +346,11 @@ _FETCH_POD_FILES()
 
 # Check the pids of pod interaction subprocesses to see which ones are done
 # and move them out of the busy list.
+# For those pods which the process ended and their state is not running, remove their ramdisks (if root).
 # The busy list format is "nakedFile,pid etc"
 _UPDATE_BUSY_LIST()
 {
-    SPACE_DEP="_DESTROY_RAMDISKS _LOG"
+    SPACE_DEP="_DESTROY_RAMDISKS PRINT"
 
     local newList=""
     local tuple=
@@ -407,9 +361,9 @@ _UPDATE_BUSY_LIST()
         if kill -0 "${pid}" 2>/dev/null; then
             newList="${newList}${newList:+ }${nakedFile},${pid}"
         else
-            # The process ended, check if the state is stopped or removed,
+            # The process ended, check if the state is not "running",
             # if so then remove any ramdisks this process has created.
-            _LOG "Process exited for ${nakedFile} with PID ${pid}" "debug"
+            PRINT "Process exited for ${nakedFile} with PID ${pid}" "debug"
             if [ "$(id -u)" = "0" ]; then
                 local stateFile="${nakedFile}.state"
                 local state="$(cat "${stateFile}")"
@@ -423,80 +377,13 @@ _UPDATE_BUSY_LIST()
     _BUSYLIST="${newList}"
 }
 
-# Check if any configs have changed for the given pods.
-_CHECK_CONFIG_CHANGES()
-{
-    SPACE_DEP="FILE_DIR_CHECKSUM STRING_ITEM_INDEXOF STRING_ITEM_GET"
-
-    local changedList=""
-    local newList=""
-
-    local nakedFile=
-    for nakedFile in ${_PODS}; do
-        local podDir="${nakedFile%/*}"
-        local configsDir="${podDir}/config"
-        if [ ! -d "${podDir}" ]; then
-            continue
-        fi
-
-        local isBusy=0
-        local tuple=
-        for tuple in ${_BUSYLIST}; do
-            local nakedFile2="${tuple%%,*}"
-            if [ "${nakedFile}" = "${nakedFile2}" ]; then
-                # Pod is in busy list.
-                isBusy=1
-                break
-            fi
-        done
-
-        # Get the checksum of each config dir in the pod dir.
-        local configDir=
-        for configDir in $(find "${configsDir}" -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do
-            if [ ! -d "${configDir}" ]; then
-                continue
-            fi
-
-            # Get previous checksum, if any
-            local chksumPrevious=
-            local index=
-            if STRING_ITEM_INDEXOF "${_CONFIGCHKSUMS}" "${configDir}" "index"; then
-                STRING_ITEM_GET "${_CONFIGCHKSUMS}" "$((index+1))" "chksumPrevious"
-            fi
-
-            # If this pod is in busy list, just transfer the previous checksum over,
-            # because if config has changed we don't want to burn that notification already.
-            if [ "${isBusy}" = "1" ]; then
-                newList="${newList}${newList:+ }${configDir} ${chksumPrevious}"
-                continue
-            fi
-
-            local chksum=
-            if ! chksum=$(FILE_DIR_CHECKSUM "${configDir}"); then
-                return 1
-            fi
-
-            if ! [ "${chksum}" = "${chksumPrevious}" ]; then
-                # Mismatch, store it in changed list, unless this was the first time
-                if [ -n "${chksumPrevious}" ]; then
-                    changedList="${changedList}${changedList:+ }${configDir}"
-                fi
-            fi
-            newList="${newList}${newList:+ }${configDir} ${chksum}"
-        done
-    done
-
-    _CONFIGCHKSUMS="${newList}"
-    _CONFIGSCHANGED="${changedList}"
-}
-
 # Go through the state files list,
-# for each state file which is not in the busy list
-# check if its configs has changed
-# and spawn a update process with state and potential config updates.
+# for each state file which is not in the busy list check if there has been a state change.
+# If there is an pod.action file present, we process that action instead of looking at state changes.
+# The action operation is used for rerunning the pod or some containers.
 _SPAWN_PROCESSES()
 {
-    SPACE_DEP="_SPAWN_PROCESS _SPAWN_STATE_CHANGED _LOG_CLEAR _LOG STRING_IS_ALL"
+    SPACE_DEP="_SPAWN_PROCESS _SPAWN_STATE_CHANGED PRINT STRING_IS_ALL"
 
     local nakedFile=
     for nakedFile in ${_PODS}; do
@@ -505,7 +392,7 @@ _SPAWN_PROCESSES()
         for tuple in ${_BUSYLIST}; do
             local nakedFile2="${tuple%%,*}"
             if [ "${nakedFile}" = "${nakedFile2}" ]; then
-                # Pod is in busy list.
+                # Pod is in busy list, skip for now
                 continue 2
             fi
         done
@@ -524,49 +411,40 @@ _SPAWN_PROCESSES()
                 action=
             fi
             if [ -z "${action}" ]; then
-                _LOG "Action not recognized for ${nakedFile}" "error" 0
+                PRINT "Action not recognized for ${nakedFile}" "error" 0
             fi
         fi
 
         local stateFile="${nakedFile}.state"
         local state="$(cat "${stateFile}")"
-        local changedConfigs=""
+        local stateChanged="false"
+
+        if _SPAWN_STATE_CHANGED "${nakedFile}" "${state}"; then
+            stateChanged="true"
+            PRINT "State changed. Exec ${nakedFile} ${state}" "info" 0
+        fi
+
+        if [ "${stateChanged}" = "true" ] && [ -n "${action}" ]; then
+            PRINT "Action '${action}' provided but pod state did also change, so ignoring action. For ${nakedFile}" "warning" 0
+            action=""
+        fi
+
         if [ "${state}" = "running" ]; then
-            # Check for changed configs
-            local configDir=
-            for configDir in ${_CONFIGSCHANGED}; do
-                # Check if this config dir is for the current pod
-                local config="${configDir##${podDir}/config/}"
-                if [ "${config}" != "${configDir}" ]; then
-                    changedConfigs="${changedConfigs}${changedConfigs:+ }${config}"
-                fi
-            done
             if [ -n "${action}" ]; then
-                _LOG "Action '${action}' provided for ${nakedFile}" "info" 0
+                PRINT "Action '${action}' provided for ${nakedFile}" "info" 0
             fi
         else
             if [ -n "${action}" ]; then
-                _LOG "Action '${action}' provided but pod is not in 'running' state for ${nakedFile}" "info" 0
+                PRINT "Action '${action}' provided but pod is not in 'running' state for ${nakedFile}" "warning" 0
+                # Do not perform actions on non running containers
+                action=""
             fi
         fi
 
-        local stateChanged="false"
-        if _SPAWN_STATE_CHANGED "${nakedFile}" "${state}"; then
-            stateChanged="true"
-            _LOG "State changed. Exec ${nakedFile} ${state}" "info" 0
-            _LOG_CLEAR "exec:${nakedFile}"
-        fi
-
-        if [ -n "${changedConfigs}" ]; then
-            _LOG "Configs changed. Reload configs for ${nakedFile}" "info" 0
-            _LOG_CLEAR "config:${nakedFile}"
-        fi
-
         if [ "${stateChanged}" = "true" ] ||
-           [ "${state}" = "running" ] ||
-           [ -n "${changedConfigs}" ]; then
-            if ! _SPAWN_PROCESS "${nakedFile}" "${state}" "${changedConfigs}" "${action}"; then
-                _LOG "Could not spawn process for ${nakedFile}" "error" "spawn:${nakedFile}"
+           [ -n "${action}" ]; then
+            if ! _SPAWN_PROCESS "${nakedFile}" "${state}" "${action}"; then
+                PRINT "Could not spawn process for ${nakedFile}" "error"
                 return 0
             fi
         fi
@@ -604,16 +482,13 @@ _SPAWN_STATE_CHANGED()
 # Spawn a subprocess and put it in the busy list.
 _SPAWN_PROCESS()
 {
-    SPACE_SIGNATURE="nakedfile state changedConfigs action"
-    SPACE_DEP="STRING_HASH _CREATE_RAMDISK _LOG"
+    SPACE_SIGNATURE="nakedfile state action"
+    SPACE_DEP="STRING_HASH _CREATE_RAMDISK PRINT"
 
     local nakedFile="${1}"
     shift
 
     local state="${1}"
-    shift
-
-    local changedConfigs="${1}"
     shift
 
     local action="${1}"
@@ -631,12 +506,18 @@ _SPAWN_PROCESS()
 
     local command=
 
-    if [ "${state}" = "running" ]; then
+    # If we have an action given, then we hijack the command at this point.
+    if [ -n "${action}" ]; then
+        command="${action}"
+    elif [ "${state}" = "running" ]; then
         command="run"
         if [ "$(id -u)" = "0" ]; then
             # Check if to create ramdisks for this pod
+            # Note: instead of running `pod create-ramdisks` as root and have it done with,
+            # we drop privileges and get the ramdisk config. This is a security consideration
+            # because we don't want to run any user provided pod code as root.
             local ramdisks=
-            ramdisks="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ramdisk-config")"
+            ramdisks="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} create-ramdisks -l")"
             if [ -n "${ramdisks}" ]; then
                 local podDir="${nakedFile%/*}"
                 local ramdisk=
@@ -645,10 +526,10 @@ _SPAWN_PROCESS()
                     local size="${ramdisk#*:}"
                     local error=
                     if ! error="$(_CREATE_RAMDISK "${podDir}" "${name}" "${size}" 2>&1)"; then
-                        _LOG "Could not create ramdisk ${name}:${size} in ${podDir}, Error: ${error}" "error" "ramdisk:${podDir}:${name}:${size}"
+                        PRINT "Could not create ramdisk ${name}:${size} in ${podDir}, Error: ${error}" "error"
                         return 1
                     else
-                        _LOG "Created ramdisk ${name}:${size} in ${podDir}" "info" "ramdisk:${podDir}:${name}:${size}"
+                        PRINT "Created ramdisk ${name}:${size} in ${podDir}" "info"
                     fi
                 done
             fi
@@ -658,13 +539,8 @@ _SPAWN_PROCESS()
     elif [ "${state}" = "removed" ]; then
         command="rm"
     else
-        _LOG "State file has unknown state." "debug"
+        PRINT "State file has unknown state." "debug"
         return 0
-    fi
-
-    # If we have a action given, then we hijack the command at this point.
-    if [ "${state}" = "running" ] && [ -n "${action}" ]; then
-        command="${action}"
     fi
 
     local hash=
@@ -672,71 +548,72 @@ _SPAWN_PROCESS()
         return 1
     fi
 
-    local proxyConfigFragment="${_TMPDIR}/proxy.${hash}.conf"
-
     local pid=
     (
         local error=
         # If running as root we will drop privileges here, thanks to ${exec}.
         if ! error="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"; then
-            _LOG "Could not exec ${podFile} ${command}. Error: ${error}" "error" "exec:${podFile}"
-        fi
-        if [ -n "${changedConfigs}" ]; then
-            if ! error="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} reload-configs ${changedConfigs}" 2>&1)"; then
-                _LOG "Could not exec ${podFile} reload-configs. Error: ${error}" "error" "config:${podFile}"
-            fi
+            PRINT "Could not exec ${podFile} ${command}. Error: ${error}" "error"
         fi
 
-        # We mute stderr for the remaining ${exec} invocations by setting: SPACE_LOG_LEVEL="0"
-        if [ "${state}" = "running" ]; then
-            local cc=
-            if [ -f "${podFile}.proxy.conf" ]; then
-                cc="$(cat "${podFile}.proxy.conf")"
-            fi
-            if [ -n "${cc}" ]; then
-                # Run ReadinessProbe and write proxy config fragment.
-                if USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="0" ${exec} "${podFile} readiness"; then
-                    printf "%s\\n" "${cc}" >"${proxyConfigFragment}.tmp"
-                else
-                    # Reset
-                    printf "# Not ready: %s\\n" "${podFile}" >"${proxyConfigFragment}.tmp"
-                fi
-                mv -f "${proxyConfigFragment}.tmp" "${proxyConfigFragment}"
-            fi
-
-            # Run LivenessProbe
-            USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="0" ${exec} "${podFile} liveness"
-        else
-            # If not running, remove the proxy config for this pod.
-            if [ -f "${proxyConfigFragment}" ]; then
-                rm "${proxyConfigFragment}" 
-            fi
-        fi
     )&
     pid=$!
 
     _BUSYLIST="${_BUSYLIST}${_BUSYLIST:+ }${nakedFile},${pid}"
 }
 
-# Concat all proxy config fragments into a whole and compare it to the existing config.
-# If they differ then update the actual config.
+# For all pods which are in the running state and have readiness, concat
+# their pod.proxy files and if the result differs from the existing existing config
+# then update the actual config.
 _WRITE_PROXY_CONFIG()
 {
     if [ -z "${_PROXYCONF}" ]; then
         return 0
     fi
 
-    local proxyConf="${_TMPDIR}/proxy.conf"
+    local nl="
+"
+    local contents=""
+    local nakedFile=
+    for nakedFile in ${_PODS}; do
+        # Check so state is running
+        local stateFile="${nakedFile}.state"
+        if [ ! -f "${stateFile}" ]; then
+            continue
+        fi
+        local state="$(cat "${stateFile}")"
+        if [ "${state}" != "running" ]; then
+            continue
+        fi
 
-    local file=
-    cat "${_TMPDIR}"/proxy.*.conf 2>/dev/null |sort >"${proxyConf}"
-    printf "%s\\n" "### EOF" >>"${proxyConf}"
+        # Check readiness
+        local statusFile="${nakedFile}.status"
+        if [ ! -f "${statusFile}" ]; then
+            continue
+        fi
+        local readiness="$(grep "^readiness:" "${statusFile}" |cut -d' ' -f2)"
+        if [ "${readiness}" = "1" ]; then
+            # Check that last update time is not too old
+            local updated="$(grep "^updated:" "${statusFile}" |cut -d' ' -f2)"
+            local ts="$(date +%s)"
+            # Allow a maximum 10 minutes old update.
+            if $((ts-updated > 600)); then
+                continue
+            fi
+            contents="${contents}${contents:+ $nl}$(cat "${statusFile}")"
+        fi
+    done
+
+    local proxyConf="$(mktemp 2>/dev/null || mktemp -t 'sometmpdir')"
+
+    printf "%s\\n" "${contents}" |sort >"${proxyConf}"
 
     if diff "${_PROXYCONF}" "${proxyConf}" >/dev/null 2>&1; then
+        rm "${proxyConf}"
         return 0
     fi
 
-    cp "${proxyConf}" "${_PROXYCONF}"
+    mv -f "${proxyConf}" "${_PROXYCONF}"
 }
 
 # This function must be run as root
@@ -759,6 +636,9 @@ _CREATE_RAMDISK()
         return 0
     fi
 
+    # If the pod was run without daemon prior and it created "fake" ramdisks which might be lingering from an abrupt shutdown,
+    # that is fine, since a mount will shadow the existing directory contents.
+
     if ! mount -t tmpfs -o size="${size}" tmpfs "${podDir}/ramdisk/${name}"; then
         return 1
     fi
@@ -771,72 +651,15 @@ _CREATE_RAMDISK()
 _DESTROY_RAMDISKS()
 {
     SPACE_SIGNATURE="podDir"
-    SPACE_DEP="_LOG"
+    SPACE_DEP="PRINT"
 
     if [ -d "${podDir}/ramdisk" ]; then
         local dir=
         for dir in $(find "${podDir}/ramdisk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do
             if mountpoint -q "${dir}"; then
-                _LOG "Unmount ramdisk ${dir}" "info"
+                PRINT "Unmount ramdisk ${dir}" "info"
                 umount "${dir}"
             fi
         done
     fi
-}
-
-# Depends on that _LOGFILETAGS is a path to a tmp file.
-_LOG()
-{
-    SPACE_SIGNATURE="message level tag"
-    SPACE_DEP="PRINT STRING_HASH"
-
-    local message="${1}"
-    shift
-
-    local level="${1}"
-    shift
-
-    # The tag can be used to have different formatted messages group together.
-    # If no tag provided the message is the tag which means it won't repeat it self.
-    local tag="${1:-${message}}"
-
-    if [ "${tag}" = "0" ]; then
-        PRINT "${message}" "${level}" 0
-        return
-    fi
-
-    # Check if this tag already exists, of so check if the level is the same.
-    local hash=
-    STRING_HASH "${tag}" "hash"
-
-    # Check if hash is present
-    local row=
-    local level2=
-    if row="$(grep "^${hash}\>" "${_LOGFILETAGS}" 2>/dev/null)"; then
-        level2="${row#*[ ]}"
-    fi
-
-    if [ "${level}" != "${level2}" ]; then
-        local logtext="$(grep -v "^${hash}\>" "${_LOGFILETAGS}")"
-        printf "%s\\n%s\\n" "${logtext}" "${hash} ${level}" >"${_LOGFILETAGS}"
-        if [ "${level}" = "fatal" ]; then
-            level="error"
-        fi
-        PRINT "${message}" "${level}" 0
-    fi
-}
-
-_LOG_CLEAR()
-{
-    SPACE_SIGNATURE="tag"
-    SPACE_DEP="STRING_HASH"
-
-    local tag="${1}"
-    shift
-
-    local hash=
-    STRING_HASH "${tag}" "hash"
-
-    local logtext="$(grep -v "^${hash}\>" "${_LOGFILETAGS}")"
-    printf "%s\\n" "${logtext}" >"${_LOGFILETAGS}"
 }
