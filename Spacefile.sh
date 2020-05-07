@@ -142,7 +142,7 @@ DAEMON_MAIN()
     # If not root and no dir given then exit.
     if [ "$(id -u)" != 0 ]; then
         if [ -z "${hostHome}" ]; then
-            PRINT "The daemon has to be run as root, unless it is meant to be run for a single cluster project then provide the HOSTHOME dir as first argument" "error"
+            PRINT "The daemon has to be run as root, unless it is meant to be run for a single cluster project then provide the HOSTHOME dir as first argument" "error" 0
             return 1
         fi
     fi
@@ -158,11 +158,11 @@ DAEMON_MAIN()
         # Run for single user
         hostHome="$(FILE_REALPATH "${hostHome}")"
         if [ ! -d "${hostHome}/pods" ]; then
-            PRINT "The specified hostHome '${hostHome}' is lacking a 'pods' dir" "error"
+            PRINT "The specified hostHome '${hostHome}' is lacking a 'pods' dir" "error" 0
             return 1
         fi
-        PRINT "Running service for single host home. PID: $$" "info"
-        PRINT "Adding watch to ${hostHome}" "info"
+        PRINT "Running service for single host home. PID: $$" "info" 0
+        PRINT "Adding watch to ${hostHome}" "info" 0
         local pid=
         _DAEMON_RUN "${hostHome}" &
         pid=$!
@@ -173,7 +173,7 @@ DAEMON_MAIN()
             sleep 1
         done
     else
-        PRINT "Running service for all users. PID: $$" "info"
+        PRINT "Running service for all users. PID: $$" "info" 0
 
         local clustersDone=""
 
@@ -190,7 +190,7 @@ DAEMON_MAIN()
                 fi
 
                 clustersDone="${clustersDone}${clustersDone:+ }${hostHome}"
-                PRINT "Adding watch to ${hostHome}" "info"
+                PRINT "Adding watch to ${hostHome}" "info" 0
 
                 local pid=
                 _DAEMON_RUN "${hostHome}" &
@@ -236,18 +236,18 @@ _DAEMON_RUN()
     # Declaring some shared variables here:
     local _USER=
     if ! _USER="$(FILE_STAT "${hostHome}" "%U")"; then
-        PRINT "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
+        PRINT "Could not stat owner of directory ${hostHome}, will not run this instance" "error" 0
         return 1
     fi
     local _USERUID=
     if ! _USERUID="$(FILE_STAT "${hostHome}" "%u")"; then
-        PRINT "Could not stat owner of directory ${hostHome}, will not run this instance" "error"
+        PRINT "Could not stat owner of directory ${hostHome}, will not run this instance" "error" 0
         return 1
     fi
 
     local _USERGID=
     if ! _USERGID="$(FILE_STAT "${hostHome}" "%g")"; then
-        PRINT "Could not stat owner group of directory ${hostHome}, will not run this instance" "error"
+        PRINT "Could not stat owner group of directory ${hostHome}, will not run this instance" "error" 0
         return 1
     fi
 
@@ -259,6 +259,9 @@ _DAEMON_RUN()
     local _CURRENT_STATES=""
 
     local _PHASE="normal"
+
+    # Bash needs INT to be ignored in subprocesses.
+    trap '' INT
 
     trap _TRAP_TERM HUP
 
@@ -274,13 +277,13 @@ _DAEMON_RUN()
 
     # Perform graceful shutdown.
     # Wait for all subprocesses to exit.
-    PRINT "Initiating graceful shutdown for ${hostHome}" "info"
+    PRINT "Initiating graceful shutdown for ${hostHome}" "info" 0
     while [ -n "${_BUSYLIST}" ]; do
         _UPDATE_BUSY_LIST
         sleep 2
     done
 
-    PRINT "Shutdown done for ${hostHome}" "info"
+    PRINT "Shutdown done for ${hostHome}" "info" 0
 }
 
 _TRAP_TERM()
@@ -297,22 +300,22 @@ _DAEMON_ITERATE()
     SPACE_DEP="PRINT _UPDATE_BUSY_LIST _FETCH_POD_FILES _SPAWN_PROCESSES _WRITE_PROXY_CONFIG"
 
     if ! _FETCH_POD_FILES; then
-        PRINT "Error in fetching pod files" "error"
+        PRINT "Error in fetching pod files" "error" 0
         return 1
     fi
 
     if ! _UPDATE_BUSY_LIST; then
-        PRINT "Cannot update busy list" "error"
+        PRINT "Cannot update busy list" "error" 0
         return 1
     fi
 
     if ! _SPAWN_PROCESSES; then
-       PRINT "Could not spawn process" "error"
+       PRINT "Could not spawn process" "error" 0
         return 1
     fi
 
     if ! _WRITE_PROXY_CONFIG; then
-        PRINT "Could not write proxy config" "error"
+        PRINT "Could not write proxy config" "error" 0
         return 1
     fi
 }
@@ -363,7 +366,7 @@ _UPDATE_BUSY_LIST()
         else
             # The process ended, check if the state is not "running",
             # if so then remove any ramdisks this process has created.
-            PRINT "Process exited for ${nakedFile} with PID ${pid}" "debug"
+            PRINT "Process exited for ${nakedFile} with PID ${pid}" "debug" 0
             if [ "$(id -u)" = "0" ]; then
                 local stateFile="${nakedFile}.state"
                 local state="$(cat "${stateFile}")"
@@ -444,7 +447,7 @@ _SPAWN_PROCESSES()
         if [ "${stateChanged}" = "true" ] ||
            [ -n "${action}" ]; then
             if ! _SPAWN_PROCESS "${nakedFile}" "${state}" "${action}"; then
-                PRINT "Could not spawn process for ${nakedFile}" "error"
+                PRINT "Could not spawn process for ${nakedFile}" "error" 0
                 return 0
             fi
         fi
@@ -526,10 +529,10 @@ _SPAWN_PROCESS()
                     local size="${ramdisk#*:}"
                     local error=
                     if ! error="$(_CREATE_RAMDISK "${podDir}" "${name}" "${size}" 2>&1)"; then
-                        PRINT "Could not create ramdisk ${name}:${size} in ${podDir}, Error: ${error}" "error"
+                        PRINT "Could not create ramdisk ${name}:${size} in ${podDir}, Error: ${error}" "error" 0
                         return 1
                     else
-                        PRINT "Created ramdisk ${name}:${size} in ${podDir}" "info"
+                        PRINT "Created ramdisk ${name}:${size} in ${podDir}" "info" 0
                     fi
                 done
             fi
@@ -539,7 +542,7 @@ _SPAWN_PROCESS()
     elif [ "${state}" = "removed" ]; then
         command="rm"
     else
-        PRINT "State file has unknown state." "debug"
+        PRINT "State file has unknown state." "debug" 0
         return 0
     fi
 
@@ -553,7 +556,7 @@ _SPAWN_PROCESS()
         local error=
         # If running as root we will drop privileges here, thanks to ${exec}.
         if ! error="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"; then
-            PRINT "Could not exec ${podFile} ${command}. Error: ${error}" "error"
+            PRINT "Could not exec ${podFile} ${command}. Error: ${error}" "error" 0
         fi
 
     )&
@@ -595,10 +598,12 @@ _WRITE_PROXY_CONFIG()
         if [ "${readiness}" = "1" ]; then
             # Check that last update time is not too old
             local updated="$(grep "^updated:" "${statusFile}" |cut -d' ' -f2)"
-            local ts="$(date +%s)"
-            # Allow a maximum 10 minutes old update.
-            if $((ts-updated > 600)); then
-                continue
+            if [ -n "${updated}" ]; then
+                local ts="$(date +%s)"
+                # Allow a maximum 10 minutes old update.
+                if [ $((ts-updated > 600)) -eq 0 ]; then
+                    continue
+                fi
             fi
             contents="${contents}${contents:+ $nl}$(cat "${statusFile}")"
         fi
@@ -657,7 +662,7 @@ _DESTROY_RAMDISKS()
         local dir=
         for dir in $(find "${podDir}/ramdisk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do
             if mountpoint -q "${dir}"; then
-                PRINT "Unmount ramdisk ${dir}" "info"
+                PRINT "Unmount ramdisk ${dir}" "info" 0
                 umount "${dir}"
             fi
         done
