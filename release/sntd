@@ -849,6 +849,7 @@ _WRITE_PROXY_CONFIG()
         fi
 
         # Check readiness
+        local proxyFile="${nakedFile}.proxy.conf"
         local statusFile="${nakedFile}.status"
         if [ ! -f "${statusFile}" ]; then
             continue
@@ -860,11 +861,11 @@ _WRITE_PROXY_CONFIG()
             if [ -n "${updated}" ]; then
                 local ts="$(date +%s)"
                 # Allow a maximum 10 minutes old update.
-                if [ $((ts-updated > 600)) -eq 0 ]; then
+                if [ $((ts-updated > 600)) -eq 1 ]; then
                     continue
                 fi
             fi
-            contents="${contents}${contents:+ $nl}$(cat "${statusFile}")"
+            contents="${contents}${contents:+ $nl}$(cat "${proxyFile}")"
         fi
     done
 
