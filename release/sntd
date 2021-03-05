@@ -4,7 +4,7 @@
 #    / __/ _ \/ _ |/ ___/ __/ / __/ // /
 #   _\ \/ ___/ __ / /__/ _/_ _\ \/ _  /
 #  /___/_/  /_/ |_\___/___(_)___/_//_/
-#  version: 1.3.0 | https://space.sh
+#  version: 1.4.0 | https://space.sh
 #
 # Node: /cmdline/
 # Use sntd as a standalone cmd line tool
@@ -304,7 +304,7 @@ _DAEMON_RUN()
     fi
 
     local _PODPATTERNS="${hostHome}/pods,.*/release/[^.].*/.*.state"
-    local _PROXYCONF="${hostHome}/proxy.conf"
+    local _PROXYCONF="${hostHome}/portmappings.conf"
     local _SUBPROCESS_LOG_LEVEL="${SPACE_LOG_LEVEL:-2}"  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
     local _BUSYLIST=""
     local _PODS=""
@@ -849,7 +849,7 @@ _WRITE_PROXY_CONFIG()
         fi
 
         # Check readiness
-        local proxyFile="${nakedFile}.proxy.conf"
+        local proxyFile="${nakedFile}.portmappings.conf"
         local statusFile="${nakedFile}.status"
         if [ ! -f "${statusFile}" ]; then
             continue
@@ -865,7 +865,9 @@ _WRITE_PROXY_CONFIG()
                     continue
                 fi
             fi
-            contents="${contents}${contents:+ $nl}$(cat "${proxyFile}")"
+            if [ -f "${proxyFile}" ]; then
+                contents="${contents}${contents:+ $nl}$(cat "${proxyFile}")"
+            fi
         fi
     done
 
