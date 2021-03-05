@@ -252,7 +252,7 @@ _DAEMON_RUN()
     fi
 
     local _PODPATTERNS="${hostHome}/pods,.*/release/[^.].*/.*.state"
-    local _PROXYCONF="${hostHome}/proxy.conf"
+    local _PROXYCONF="${hostHome}/portmappings.conf"
     local _SUBPROCESS_LOG_LEVEL="${SPACE_LOG_LEVEL:-2}"  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
     local _BUSYLIST=""
     local _PODS=""
@@ -557,6 +557,7 @@ _SPAWN_PROCESS()
         # If running as root we will drop privileges here, thanks to ${exec}.
         if ! error="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"; then
             PRINT "Could not exec ${podFile} ${command}. Error: ${error}" "error" 0
+            # TODO: we need the daemon to retry this, right?
         fi
 
     )&
@@ -566,7 +567,7 @@ _SPAWN_PROCESS()
 }
 
 # For all pods which are in the running state and have readiness, concat
-# their pod.proxy files and if the result differs from the existing existing config
+# their pod.portmappings.conf files and if the result differs from the existing config
 # then update the actual config.
 _WRITE_PROXY_CONFIG()
 {
@@ -590,7 +591,7 @@ _WRITE_PROXY_CONFIG()
         fi
 
         # Check readiness
-        local proxyFile="${nakedFile}.proxy.conf"
+        local proxyFile="${nakedFile}.portmappings.conf"
         local statusFile="${nakedFile}.status"
         if [ ! -f "${statusFile}" ]; then
             continue
@@ -606,7 +607,9 @@ _WRITE_PROXY_CONFIG()
                     continue
                 fi
             fi
-            contents="${contents}${contents:+ $nl}$(cat "${proxyFile}")"
+            if [ -f "${proxyFile}" ]; then
+                contents="${contents}${contents:+ $nl}$(cat "${proxyFile}")"
+            fi
         fi
     done
 
