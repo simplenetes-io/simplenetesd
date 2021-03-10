@@ -364,13 +364,25 @@ _UPDATE_BUSY_LIST()
         if kill -0 "${pid}" 2>/dev/null; then
             newList="${newList}${newList:+ }${nakedFile},${pid}"
         else
-            # The process ended, check if the state is not "running",
-            # if so then remove any ramdisks this process has created.
-            PRINT "Process exited for ${nakedFile} with PID ${pid}" "debug" 0
-            if [ "$(id -u)" = "0" ]; then
-                local stateFile="${nakedFile}.state"
-                local state="$(cat "${stateFile}")"
-                if [ "${state}" != "running" ]; then
+            # The process ended, check if it should be running and exit code was > 0, then put it back for retry.
+            # Otherwise if the state is not "running" remove any ramdisks this process has created.
+            # Get exit code
+            local exitCode=
+            wait "${pid}"
+            exitCode="$?"
+            PRINT "Spawn process exited for ${nakedFile} with PID ${pid}, exit code: ${exitCode}." "debug" 0
+            local stateFile="${nakedFile}.state"
+            local state="$(cat "${stateFile}")"
+            if [ "${state}" = "running" ]; then
+                if [ "${exitCode}" -gt 0 ]; then
+                    # Retry running this.
+                    PRINT "Retry running ${nakedFile}" "info" 0
+                    local actionFile="${nakedFile}.action"
+                    printf "%s\\n" "rerun" >"${actionFile}"
+                fi
+            else
+                # Remove ramdisks, if sntd running as root.
+                if [ "$(id -u)" = "0" ]; then
                     local podDir="${nakedFile%/*}"
                     _DESTROY_RAMDISKS "${podDir}"
                 fi
@@ -554,12 +566,14 @@ _SPAWN_PROCESS()
     local pid=
     (
         local error=
+        local exitCode=
         # If running as root we will drop privileges here, thanks to ${exec}.
-        if ! error="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"; then
-            PRINT "Could not exec ${podFile} ${command}. Error: ${error}" "error" 0
-            # TODO: we need the daemon to retry this, right?
+        error="$(USER="${_USER}" HOME="${_HOME}" SPACE_LOG_LEVEL="${_SUBPROCESS_LOG_LEVEL}" ${exec} "${podFile} ${command}" 2>&1)"
+        exitCode="$?"
+        if [ "${exitCode}" -gt 0 ]; then
+            PRINT "Could not exec ${podFile} ${command}. Exit code: ${exitCode}. Error: ${error}" "error" 0
+            return "${exitCode}"
         fi
-
     )&
     pid=$!
 
