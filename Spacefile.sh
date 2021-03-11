@@ -10,7 +10,7 @@ SNTD_CMDLINE()
     local _out_V="false"
 
     if ! _GETOPTS "h V" "" 0 1 "$@"; then
-        printf "Usage: sntd [clusterHome]  [-o logfile] \\n" >&2
+        printf "Usage: simplenetesd [clusterHome]  [-o logfile] \\n" >&2
         return 1
     fi
 
@@ -31,13 +31,13 @@ USAGE()
 {
     printf "%s\\n" "Usage:
 
-    sntd -h
+    simplenetesd -h
         Output this help
 
-    sntd -V
+    simplenetesd -V
         Output version
 
-    sntd [hosthome]
+    simplenetesd [hosthome]
 
         hosthome (optional)
             Path to directory of the cluster root directory.
@@ -381,7 +381,7 @@ _UPDATE_BUSY_LIST()
                     printf "%s\\n" "rerun" >"${actionFile}"
                 fi
             else
-                # Remove ramdisks, if sntd running as root.
+                # Remove ramdisks, if simplenetesd running as root.
                 if [ "$(id -u)" = "0" ]; then
                     local podDir="${nakedFile%/*}"
                     _DESTROY_RAMDISKS "${podDir}"

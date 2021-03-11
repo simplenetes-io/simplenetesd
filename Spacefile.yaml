@@ -29,6 +29,6 @@ run:
 
 cmdline:
     _info:
-        title: Use sntd as a standalone cmd line tool
+        title: Use simplenetesd as a standalone cmd line tool
     _env:
         - RUN: SNTD_CMDLINE -- "\$@"

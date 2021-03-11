@@ -1,4 +1,4 @@
-# The Simplenetes Daemon (sntd)
+# The Simplenetes Daemon (simplenetesd)
 A Daemon which runs on the hosts in the cluster to manage the life cycles of the pods.
 
 ## Build a release of the daemon
