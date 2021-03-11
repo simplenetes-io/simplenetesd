@@ -581,7 +581,7 @@ _SPAWN_PROCESS()
 }
 
 # For all pods which are in the running state and have readiness, concat
-# their pod.portmappings.conf files and if the result differs from the existing config
+# their .pod.portmappings.conf files and if the result differs from the existing config
 # then update the actual config.
 _WRITE_PROXY_CONFIG()
 {
@@ -606,6 +606,9 @@ _WRITE_PROXY_CONFIG()
 
         # Check readiness
         local proxyFile="${nakedFile}.portmappings.conf"
+        # Make into dotfile
+        proxyFile="${proxyFile%/*}/.${proxyFile##*/}"
+
         local statusFile="${nakedFile}.status"
         if [ ! -f "${statusFile}" ]; then
             continue
