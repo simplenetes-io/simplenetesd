@@ -27,7 +27,7 @@ run:
             title: Path to the cluster dir
         - RUN: DAEMON_MAIN -- "${hosthome}"
 
-cmdline:
+_cmdline:
     _info:
         title: Use simplenetesd as a standalone cmd line tool
     _env:

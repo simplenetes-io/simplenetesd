@@ -3,28 +3,19 @@
 SNTD_CMDLINE()
 {
     SPACE_SIGNATURE="[action args]"
-    SPACE_DEP="USAGE VERSION DAEMON_MAIN _GETOPTS"
+    SPACE_DEP="USAGE VERSION DAEMON_MAIN"
 
-    local _out_rest=""
-    local _out_h="false"
-    local _out_V="false"
-
-    if ! _GETOPTS "h V" "" 0 1 "$@"; then
-        printf "Usage: simplenetesd [clusterHome]  [-o logfile] \\n" >&2
-        return 1
-    fi
-
-    if [ "${_out_h}" = "true" ]; then
+    if [ "${1:-}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
         USAGE
         return
     fi
 
-    if [ "${_out_V}" = "true" ]; then
+    if [ "${1:-}" = "version" ] || [ "${1:-}" = "-V" ]; then
         VERSION
         return
     fi
 
-    DAEMON_MAIN "${_out_rest}"
+    DAEMON_MAIN "$@"
 }
 
 USAGE()
@@ -34,7 +25,7 @@ USAGE()
     simplenetesd -h
         Output this help
 
-    simplenetesd -V
+    simplenetesd -V|--version
         Output version
 
     simplenetesd [hosthome]
@@ -53,83 +44,7 @@ USAGE()
 
 VERSION()
 {
-    printf "%s\\n" "Simplenetes daemon version 0.1."
-}
-
-_GETOPTS()
-{
-    SPACE_SIGNATURE="simpleSwitches richSwitches minPositional maxPositional [args]"
-    SPACE_DEP="PRINT STRING_SUBSTR STRING_INDEXOF STRING_ESCAPE"
-
-    local simpleSwitches="${1}"
-    shift
-
-    local richSwitches="${1}"
-    shift
-
-    local minPositional="${1:-0}"
-    shift
-
-    local maxPositional="${1:-0}"
-    shift
-
-    _out_rest=""
-
-    local options=""
-    local option=
-    for option in ${richSwitches}; do
-        options="${options}${option}:"
-    done
-
-    local posCount="0"
-    while [ "$#" -gt 0 ]; do
-        local flag="${1#-}"
-        if [ "${flag}" = "${1}" ]; then
-            # Non switch
-            posCount="$((posCount+1))"
-            if [ "${posCount}" -gt "${maxPositional}" ]; then
-                PRINT "Too many positional argumets, max ${maxPositional}" "error" 0
-                return 1
-            fi
-            _out_rest="${_out_rest}${_out_rest:+ }${1}"
-            shift
-            continue
-        fi
-        local flag2=
-        STRING_SUBSTR "${flag}" 0 1 "flag2"
-        if STRING_ITEM_INDEXOF "${simpleSwitches}" "${flag2}"; then
-            if [ "${#flag}" -gt 1 ]; then
-                PRINT "Invalid option: -${flag}" "error" 0
-                return 1
-            fi
-            eval "_out_${flag}=\"true\""
-            shift
-            continue
-        fi
-
-        local OPTIND=1
-        getopts ":${options}" "flag"
-        case "${flag}" in
-            \?)
-                PRINT "Unknown option ${1-}" "error" 0
-                return 1
-                ;;
-            :)
-                PRINT "Option -${OPTARG-} requires an argument" "error" 0
-                return 1
-                ;;
-            *)
-                STRING_ESCAPE "OPTARG"
-                eval "_out_${flag}=\"${OPTARG}\""
-                ;;
-        esac
-        shift $((OPTIND-1))
-    done
-
-    if [ "${posCount}" -lt "${minPositional}" ]; then
-        PRINT "Too few positional argumets, min ${minPositional}" "error" 0
-        return 1
-    fi
+    printf "%s\\n" "Simplenetesd 0.3.0"
 }
 
 DAEMON_MAIN()

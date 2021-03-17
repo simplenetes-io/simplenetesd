@@ -6,7 +6,7 @@
 #  /___/_/  /_/ |_\___/___(_)___/_//_/
 #  version: 1.4.0 | https://space.sh
 #
-# Node: /cmdline/
+# Node: /_cmdline/
 # Use simplenetesd as a standalone cmd line tool
 
 set -u  # Will not allow for unset variables being used.
@@ -20,26 +20,17 @@ SNTD_CMDLINE()
 {
     local _SPACE_NAME="SNTD_CMDLINE"
 
-    local _out_rest=""
-    local _out_h="false"
-    local _out_V="false"
-
-    if ! _GETOPTS "h V" "" 0 1 "$@"; then
-        printf "Usage: simplenetesd [clusterHome]  [-o logfile] \\n" >&2
-        return 1
-    fi
-
-    if [ "${_out_h}" = "true" ]; then
+    if [ "${1:-}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
         USAGE
         return
     fi
 
-    if [ "${_out_V}" = "true" ]; then
+    if [ "${1:-}" = "version" ] || [ "${1:-}" = "-V" ]; then
         VERSION
         return
     fi
 
-    DAEMON_MAIN "${_out_rest}"
+    DAEMON_MAIN "$@"
 }
 
 USAGE()
@@ -50,7 +41,7 @@ USAGE()
     simplenetesd -h
         Output this help
 
-    simplenetesd -V
+    simplenetesd -V|--version
         Output version
 
     simplenetesd [hosthome]
@@ -70,7 +61,7 @@ USAGE()
 VERSION()
 {
     local _SPACE_NAME="VERSION"
-    printf "%s\\n" "Simplenetes daemon version 0.1."
+    printf "%s\\n" "Simplenetesd 0.3.0"
 }
 
 DAEMON_MAIN()
@@ -155,81 +146,6 @@ DAEMON_MAIN()
     # Set the exit status to error if this was not a user triggered shutdown.
     [ "${_EXIT}" -eq 1 ]
     return
-}
-
-_GETOPTS()
-{
-    local _SPACE_NAME="_GETOPTS"
-
-    local simpleSwitches="${1}"
-    shift
-
-    local richSwitches="${1}"
-    shift
-
-    local minPositional="${1:-0}"
-    shift
-
-    local maxPositional="${1:-0}"
-    shift
-
-    _out_rest=""
-
-    local options=""
-    local option=
-    for option in ${richSwitches}; do
-        options="${options}${option}:"
-    done
-
-    local posCount="0"
-    while [ "$#" -gt 0 ]; do
-        local flag="${1#-}"
-        if [ "${flag}" = "${1}" ]; then
-            # Non switch
-            posCount="$((posCount+1))"
-            if [ "${posCount}" -gt "${maxPositional}" ]; then
-                PRINT "Too many positional argumets, max ${maxPositional}" "error" 0
-                return 1
-            fi
-            _out_rest="${_out_rest}${_out_rest:+ }${1}"
-            shift
-            continue
-        fi
-        local flag2=
-        STRING_SUBSTR "${flag}" 0 1 "flag2"
-        if STRING_ITEM_INDEXOF "${simpleSwitches}" "${flag2}"; then
-            if [ "${#flag}" -gt 1 ]; then
-                PRINT "Invalid option: -${flag}" "error" 0
-                return 1
-            fi
-            eval "_out_${flag}=\"true\""
-            shift
-            continue
-        fi
-
-        local OPTIND=1
-        getopts ":${options}" "flag"
-        case "${flag}" in
-            \?)
-                PRINT "Unknown option ${1-}" "error" 0
-                return 1
-                ;;
-            :)
-                PRINT "Option -${OPTARG-} requires an argument" "error" 0
-                return 1
-                ;;
-            *)
-                STRING_ESCAPE "OPTARG"
-                eval "_out_${flag}=\"${OPTARG}\""
-                ;;
-        esac
-        shift $((OPTIND-1))
-    done
-
-    if [ "${posCount}" -lt "${minPositional}" ]; then
-        PRINT "Too few positional argumets, min ${minPositional}" "error" 0
-        return 1
-    fi
 }
 
 PRINT()
@@ -444,101 +360,6 @@ FILE_REALPATH()
     printf "%s\\n" "${file}"
 }
 
-STRING_SUBSTR()
-{
-    local _SPACE_NAME="STRING_SUBSTR"
-
-    # shellcheck disable=SC2034
-    local __sopriv="${1}"
-    shift
-
-    local __index="${1}"
-    shift
-
-    local __length="${1}"
-    shift
-
-    local __outvar="${1:-}"
-    shift $(( $# > 0 ? 1 : 0 ))
-
-    local __strlength="${#__sopriv}"
-
-    if [ "${__index}" -lt 0 ]; then
-        __index=$((__strlength+__index))
-    fi
-
-    if [ "${__index}" -ge 0 ]; then
-        if [ "${__length}" = "" ]; then
-            __length=$((__strlength-__index))
-        fi
-
-        if [ "${__length}" -lt 0 ]; then
-            __length=$((__strlength-__index+__length))
-        fi
-
-        if [ "$((__index+__length))" -le "${#__sopriv}" ]; then
-            local __wildcard=
-            STRING_REPEAT "?" "${__index}" "" "__wildcard"
-            local __substr="${__sopriv#${__wildcard}}"
-            STRING_REPEAT "?" "$((${#__substr}-__length))" "" "__wildcard"
-            __substr="${__substr%${__wildcard}}"
-            if [ -n "${__outvar}" ]; then
-                eval "${__outvar}=\"\${__substr}\""
-            else
-                printf "%s\\n" "${__outvar}"
-            fi
-            return 0
-        fi
-
-    fi
-
-    if [ -n "${__outvar}" ]; then
-        eval "${__outvar}=\"\""
-    fi
-}
-
-STRING_INDEXOF()
-{
-    local _SPACE_NAME="STRING_INDEXOF"
-
-    local substr="${1}"
-    shift
-
-    local string="${1}"
-    shift
-
-    local varname="${1-}"
-    shift $(( $# > 0 ? 1 : 0 ))
-
-    local rest="${string%%${substr}*}"
-
-    if [ "${rest}" = "${string}" ]; then
-        if [ -n "${varname}" ]; then
-            eval "${varname}=\"-1\""
-        fi
-        return 1
-    fi
-
-    if [ -n "${varname}" ]; then
-        eval "${varname}=\"${#rest}\""
-    fi
-    return 0
-}
-
-STRING_ESCAPE()
-{
-    local _SPACE_NAME="STRING_ESCAPE"
-
-    local ___char=
-    for ___char in \" \$ \( \) \< \> \| \& \/; do
-        case "${2-\"\$}" in
-            *${___char}*)
-                _STRING_ESCAPE "${1}" "${___char}"
-                ;;
-        esac
-    done
-}
-
 _DAEMON_ITERATE()
 {
     local _SPACE_NAME="_DAEMON_ITERATE"
@@ -677,71 +498,6 @@ STRING_ITEM_GET()
         fi
         __count=$((__count+1))
     done
-}
-
-STRING_REPEAT()
-{
-    local _SPACE_NAME="STRING_REPEAT"
-
-    local __string="${1}"
-    shift
-
-    local __count="${1}"
-    shift
-
-    local __separator="${1}"
-    shift
-
-    local __outvar="${1}"
-    shift
-
-    local __repeatedstring=""
-    while [ "${__count}" -gt 0 ]; do
-        __count=$((__count-1))
-        __repeatedstring="${__repeatedstring}${__string}"
-        if [ "${__count}" -gt 0 ]; then
-            __repeatedstring="${__repeatedstring}${__separator}"
-        fi
-    done
-
-    eval "${__outvar}=\"\${__repeatedstring}\""
-}
-
-_STRING_ESCAPE()
-{
-    local _SPACE_NAME="_STRING_ESCAPE"
-    local __right=
-    local __result=""
-    eval "__right=\$${1}"
-    local __left=
-    while true; do
-        # Cut from right up until last occurrence of char.
-        __left="${__right%%${2}*}"
-        if [ "${__left}" = "${__right}" ]; then
-            # Done
-            __result="${__result}${__left}"
-            break
-        fi
-        __right="${__right#$__left}"
-        # This seems to be necessary the remove the escapes properly.
-        __right="${__right#*${2}}"
-        # Now cut away from right all escapes, one by one..
-        local __escapes=""
-        local __left2=
-        while true; do
-            __left2="${__left%[\\]}"
-            if [ "${__left2}" = "${__left}" ]; then
-                # No more escapes
-                break
-            fi
-            # Escape encountered
-            __escapes="${__escapes}\\"
-            __left="${__left2}"
-        done
-        # Double the number of escapes and add one.
-        __result="${__result}${__left}${__escapes}${__escapes}\\${2}"
-    done
-    eval "${1}=\${__result}"
 }
 
 _FETCH_POD_FILES()
@@ -1110,7 +866,7 @@ main()
     if [ "${_status}" -ne "${SPACE_ASSERT_EXIT}" ]; then
         if [ "${SPACE_MUTE_EXIT_MESSAGE}" != "1" ] && [ "${SPACE_LOG_LEVEL}" -ge 1 ]; then
             [ "${SPACE_LOG_ENABLE_COLORS:-1}" = "1" ] && [ -t 2 ] && printf "\033[31m" >&2
-            printf "%s\n" "[ERROR] Script exited with status $_status for node /cmdline/" >&2
+            printf "%s\n" "[ERROR] Script exited with status $_status for node /_cmdline/" >&2
             [ "${SPACE_LOG_ENABLE_COLORS:-1}" = "1" ] && [ -t 2 ] && printf "\033[0m" >&2
         fi
         if [ "${SPACE_MUTE_EXIT}" != 1 ]; then
@@ -1118,7 +874,7 @@ main()
         fi
     elif [ "${SPACE_MUTE_EXIT_MESSAGE}" != "1" ] && [ "${SPACE_LOG_LEVEL}" -ge 5 ]; then
         [ "${SPACE_LOG_ENABLE_COLORS:-1}" = "1" ] && [ 5 -eq 3 ] && [ -t 2 ] && printf "\033[32m" >&2
-        printf "%s\n" "[DEBUG] Script exited with success (status $_status) for node /cmdline/" >&2
+        printf "%s\n" "[DEBUG] Script exited with success (status $_status) for node /_cmdline/" >&2
         [ "${SPACE_LOG_ENABLE_COLORS:-1}" = "1" ] && [ 5 -eq 3 ] && [ -t 2 ] && printf "\033[0m" >&2
         : # Important to reset status here.
     fi
