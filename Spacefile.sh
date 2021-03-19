@@ -2,7 +2,7 @@
 # disappear and then respawn the pod.
 SNTD_CMDLINE()
 {
-    SPACE_SIGNATURE="[action args]"
+    SPACE_SIGNATURE="[args]"
     SPACE_DEP="USAGE VERSION DAEMON_MAIN"
 
     if [ "${1:-}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
@@ -39,7 +39,7 @@ USAGE()
             will then search for cluster directories for all users and manage the lifecycles
             for all the cluster projects on the host.
 
-" >&2
+"
 }
 
 VERSION()
