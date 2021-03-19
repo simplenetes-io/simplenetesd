@@ -219,6 +219,17 @@ _DAEMON_RUN()
         return 1
     fi
 
+    if [ "$(id -u)" = 0 ]; then
+        # If running as root make sure /run/user/UID exists properly, podman can throw errors otherwise.
+        local runDir="/run/user/${_USERUID}"
+        if [ ! -d "${runDir}" ]; then
+            mkdir -p "${runDir}"
+            chown "${_USERUID}:${_USERGID}" "${runDir}"
+            chmod 700 "${runDir}"
+        fi
+        unset runDir
+    fi
+
     local _PODPATTERNS="${hostHome}/pods,.*/release/[^.].*/.*.state"
     local _PROXYCONF="${hostHome}/portmappings.conf"
     local _SUBPROCESS_LOG_LEVEL="${SPACE_LOG_LEVEL:-2}"  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
@@ -652,6 +663,8 @@ _WRITE_PROXY_CONFIG()
     fi
 
     mv -f "${proxyConf}" "${_PROXYCONF}"
+    # Make file readable by regular user running the proxy pod.
+    chmod 644 "${_PROXYCONF}"
 }
 
 _DESTROY_RAMDISKS()
