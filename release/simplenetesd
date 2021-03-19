@@ -55,7 +55,7 @@ USAGE()
             will then search for cluster directories for all users and manage the lifecycles
             for all the cluster projects on the host.
 
-" >&2
+"
 }
 
 VERSION()
