@@ -61,7 +61,7 @@ USAGE()
 VERSION()
 {
     local _SPACE_NAME="VERSION"
-    printf "%s\\n" "Simplenetesd 0.3.0"
+    printf "%s\\n" "Simplenetesd 0.5.0"
 }
 
 DAEMON_MAIN()
@@ -230,7 +230,7 @@ _DAEMON_RUN()
         unset runDir
     fi
 
-    local _PODPATTERNS="${hostHome}/pods,.*/release/[^.].*/.*.state"
+    local _PODPATTERNS="${hostHome}/pods,.*/release/[^.].*/*.state"
     local _PROXYCONF="${hostHome}/portmappings.conf"
     local _SUBPROCESS_LOG_LEVEL="${SPACE_LOG_LEVEL:-2}"  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
     local _BUSYLIST=""
@@ -631,6 +631,9 @@ _WRITE_PROXY_CONFIG()
         local proxyFile="${nakedFile}.portmappings.conf"
 
         local statusFile="${nakedFile}.status"
+        # Make into dotfile
+        statusFile="${statusFile%/*}/.${statusFile##*/}"
+
         if [ ! -f "${statusFile}" ]; then
             continue
         fi
