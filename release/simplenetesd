@@ -629,8 +629,6 @@ _WRITE_PROXY_CONFIG()
 
         # Check readiness
         local proxyFile="${nakedFile}.portmappings.conf"
-        # Make into dotfile
-        proxyFile="${proxyFile%/*}/.${proxyFile##*/}"
 
         local statusFile="${nakedFile}.status"
         if [ ! -f "${statusFile}" ]; then
