@@ -44,7 +44,7 @@ USAGE()
 
 VERSION()
 {
-    printf "%s\\n" "Simplenetesd 0.5.0"
+    printf "%s\\n" "Simplenetesd 0.6.0"
 }
 
 DAEMON_MAIN()
@@ -179,6 +179,7 @@ _DAEMON_RUN()
 
     local _PODPATTERNS="${hostHome}/pods,.*/release/[^.].*/*.state"
     local _PROXYCONF="${hostHome}/portmappings.conf"
+    local _HOSTSCONF="${hostHome}/hosts.conf"
     local _SUBPROCESS_LOG_LEVEL="${SPACE_LOG_LEVEL:-2}"  # The SPACE_LOG_LEVEL of the subprocesses pod scripts.
     local _BUSYLIST=""
     local _PODS=""
@@ -437,6 +438,9 @@ _SPAWN_PROCESS()
 
     local podFile="${nakedFile}"
 
+    local hostInterface="$(head -n 1 "${_HOSTSCONF} 2>/dev/null")"
+    hostInterface="${hostInterface%:*}"
+
     local _HOME="${HOME}"
     local exec="sh -c"
     if [ "$(id -u)" = "0" ]; then
@@ -482,6 +486,14 @@ _SPAWN_PROCESS()
     else
         PRINT "State file has unknown state." "debug" 0
         return 0
+    fi
+
+    # Check if to add --host-interface
+    if [ -n "${hostInterface}" ]; then
+        if [ "${command}" = "run" ] || [ "${command}" = "rerun" ]; then
+            # Note: only add this for rerun of whole pod, not rerun container(s).
+            command="${command} --host-interface=${hostInterface}"
+        fi
     fi
 
     local hash=
