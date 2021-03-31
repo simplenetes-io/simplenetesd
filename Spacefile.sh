@@ -44,7 +44,7 @@ USAGE()
 
 VERSION()
 {
-    printf "%s\\n" "Simplenetesd 0.6.0"
+    printf "%s\\n" "Simplenetesd 0.6.1"
 }
 
 DAEMON_MAIN()
@@ -438,7 +438,7 @@ _SPAWN_PROCESS()
 
     local podFile="${nakedFile}"
 
-    local hostInterface="$(head -n 1 "${_HOSTSCONF} 2>/dev/null")"
+    local hostInterface="$(head -n 1 "${_HOSTSCONF}" 2>/dev/null)"
     hostInterface="${hostInterface%:*}"
 
     local _HOME="${HOME}"
