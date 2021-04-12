@@ -44,7 +44,7 @@ USAGE()
 
 VERSION()
 {
-    printf "%s\\n" "Simplenetesd 0.6.1"
+    printf "%s\\n" "Simplenetesd 0.6.2"
 }
 
 DAEMON_MAIN()
